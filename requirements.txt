@@ -1,0 +1,11 @@
+# Core automation libraries
+pyautogui==0.9.54      # Mouse/keyboard automation
+opencv-python==4.9.0.80 # Image recognition
+numpy==1.26.4          # Array operations (required by OpenCV)
+pillow==10.2.0         # Screenshot and image handling
+
+# Windows-specific (for window management)
+pywin32==306           # Windows API access
+
+# Utilities
+keyboard==0.13.5       # Hotkey support (for emergency stop)
