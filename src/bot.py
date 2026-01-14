@@ -12,6 +12,7 @@ from typing import List, Tuple
 import config
 from src.screen_capture import ScreenCapture
 from src.input_controller import InputController
+from src.game_state import GameState, GameStateDetector, UIPositions
 
 
 class ClashBot:
@@ -32,11 +33,16 @@ class ClashBot:
         """Initialize the bot components."""
         self.screen = ScreenCapture()
         self.input = InputController(screen_capture=self.screen)
+        self.state = GameStateDetector(screen_capture=self.screen)
         self.running = False
         
         # Track which card/target we're on
         self.current_card = 0
         self.current_target = 0
+        
+        # Game loop settings
+        self.games_played = 0
+        self.max_games = None  # None = infinite
         
     def setup(self) -> bool:
         """
@@ -205,6 +211,216 @@ class ClashBot:
                     
         except KeyboardInterrupt:
             print(f"\n   ✓ Captured {capture_count} positions. Exiting.")
+
+    # =========================================================================
+    # GAME LOOP METHODS
+    # =========================================================================
+    
+    def click_position(self, position: Tuple[float, float], description: str = ""):
+        """
+        Click a position on screen (percentage-based).
+        
+        Args:
+            position: (x_pct, y_pct) percentage position
+            description: What we're clicking (for logging)
+        """
+        x, y = self.screen.convert_percentage_to_pixels(position[0], position[1])
+        if description:
+            print(f"   Clicking: {description}")
+        self.input.click(x, y)
+        
+    def click_battle_button(self):
+        """Click the battle button on the main menu."""
+        print("⚔️  Clicking Battle button...")
+        self.click_position(UIPositions.BATTLE_BUTTON, "Battle button")
+    
+    def click_play_again_button(self):
+        """Click the Play Again button to start a new game."""
+        print("   Clicking Play Again...")
+        self.click_position(UIPositions.PLAY_AGAIN_BUTTON, "Play Again button")
+        
+    def click_ok_button(self):
+        """Click OK button (goes to main menu)."""
+        print("   Clicking OK...")
+        self.click_position(UIPositions.OK_BUTTON, "OK button")
+        
+    def wait_for_battle_start(self, timeout: float = 30):
+        """
+        Wait for the battle to start.
+        
+        In test arena, this is usually instant.
+        In real matches, there's matchmaking time.
+        
+        Args:
+            timeout: Max seconds to wait
+        """
+        print("   Waiting for battle to start...")
+        # For now, just wait a fixed amount
+        # Future: detect the battle UI appearing
+        time.sleep(5)
+        print("   Battle started!")
+        self.state.set_state(GameState.IN_BATTLE)
+        
+    def play_battle(self, 
+                    max_duration: float = 300,
+                    deploy_delay: float = None,
+                    randomize: bool = True,
+                    check_interval: int = 3,
+                    skip_initial_checks: int = 5):
+        """
+        Play a single battle by deploying cards until game ends.
+        
+        Args:
+            max_duration: Maximum battle length in seconds (safety limit)
+            deploy_delay: Seconds between card deploys
+            randomize: Randomize card/target selection
+            check_interval: Check for battle end every N deploys
+            skip_initial_checks: Don't check for game over until this many deploys
+        """
+        deploy_delay = deploy_delay or config.DEPLOY_DELAY
+        start_time = time.time()
+        deploy_count = 0
+        
+        print(f"\n🎮 Playing battle...")
+        print(f"   Deploy delay: {deploy_delay}s")
+        print(f"   Checking for battle end every {check_interval} deploys (after {skip_initial_checks} deploys)")
+        print()
+        
+        while True:
+            elapsed = time.time() - start_time
+            
+            # Safety limit - battles shouldn't last more than 5 min
+            if elapsed > max_duration:
+                print(f"\n   ⏰ Safety limit reached ({max_duration}s)")
+                break
+            
+            # Deploy a card
+            if randomize:
+                card = random.randint(0, 3)
+                target = random.choice(config.DROP_TARGETS)
+            else:
+                card = None
+                target = None
+                
+            deploy_count += 1
+            elapsed_str = f"{int(elapsed)}s"
+            print(f"   [{elapsed_str}] Deploy #{deploy_count}", end=" ")
+            self.deploy_card(card_slot=card, target=target)
+            
+            # Check if battle is over (skip first few deploys to avoid false positives)
+            if deploy_count >= skip_initial_checks and deploy_count % check_interval == 0:
+                print(f"   Checking game state...")
+                if self.state.is_battle_over():
+                    print(f"\n   🏁 Battle ended detected!")
+                    break
+            
+            # Wait before next deploy
+            time.sleep(deploy_delay)
+        
+        print(f"\n   Battle complete! Deployed {deploy_count} cards in {int(elapsed)}s")
+        self.state.set_state(GameState.BATTLE_ENDED)
+        return deploy_count
+    
+    def handle_battle_end(self, play_again: bool = True):
+        """
+        Handle the post-battle screen.
+        
+        Args:
+            play_again: If True, click Play Again. If False, click OK to go to menu.
+        """
+        print("\n🏁 Battle ended!")
+        
+        # Wait for end screen to fully appear
+        time.sleep(2)
+        
+        if play_again:
+            self.click_play_again_button()
+            print("   Waiting for new game to load...")
+            time.sleep(5)  # Wait longer for new game to load
+            
+            # Verify the Play Again button is gone (new game started)
+            if self.state.is_battle_over():
+                print("   ⚠️ Still on end screen, clicking again...")
+                self.click_play_again_button()
+                time.sleep(5)
+            
+            print("   New game ready!")
+            self.state.set_state(GameState.IN_BATTLE)
+        else:
+            self.click_ok_button()
+            time.sleep(2)
+            # Sometimes there are multiple screens to dismiss
+            if self.state.is_battle_over():
+                self.click_ok_button()
+                time.sleep(2)
+            print("   Returned to menu")
+            self.state.set_state(GameState.MAIN_MENU)
+    
+    def run_game_loop(self, 
+                      num_games: int = None,
+                      battle_duration: float = 180,
+                      deploy_delay: float = None):
+        """
+        Run the full game loop: Menu → Battle → Play → End → Repeat
+        
+        Args:
+            num_games: Number of games to play. None = infinite
+            battle_duration: How long to play each battle (seconds)
+            deploy_delay: Seconds between card deploys
+        """
+        self.running = True
+        self.games_played = 0
+        self.max_games = num_games
+        
+        print("\n" + "=" * 50)
+        print("🤖 STARTING GAME LOOP")
+        print("=" * 50)
+        print(f"   Games to play: {'infinite' if num_games is None else num_games}")
+        print(f"   Battle duration: {battle_duration}s")
+        print(f"   Press Ctrl+C to stop")
+        print()
+        
+        # Bring game to front
+        self.screen.bring_to_front()
+        time.sleep(1)
+        
+        try:
+            while self.running:
+                # Check if we've hit our game limit
+                if num_games is not None and self.games_played >= num_games:
+                    print(f"\n✓ Completed {num_games} games!")
+                    break
+                
+                self.games_played += 1
+                print(f"\n{'='*50}")
+                print(f"📍 GAME {self.games_played}" + (f" of {num_games}" if num_games else ""))
+                print(f"{'='*50}")
+                
+                # First game: need to click Battle button from main menu
+                # Subsequent games: we're already in battle from "Play Again"
+                if self.games_played == 1:
+                    self.click_battle_button()
+                    self.wait_for_battle_start()
+                else:
+                    # Already starting from Play Again click
+                    print("   New battle starting...")
+                    time.sleep(2)
+                
+                # Play the battle
+                self.play_battle(
+                    max_duration=battle_duration,
+                    deploy_delay=deploy_delay
+                )
+                
+                # Handle end screen (clicks Play Again for next game)
+                is_last_game = (num_games is not None and self.games_played >= num_games)
+                self.handle_battle_end(play_again=not is_last_game)
+                
+        except KeyboardInterrupt:
+            print(f"\n\n⏹️  Stopped by user after {self.games_played} games")
+        
+        self.running = False
+        print("\n🏁 Game loop ended.")
 
 
 # =============================================================================
