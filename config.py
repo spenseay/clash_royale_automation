@@ -57,13 +57,31 @@ RIGHT_BRIDGE = (0.75, 0.50)
 BEHIND_KING = (0.50, 0.70)
 
 # Default drop targets for testing
+# More variety = more human-like
 DROP_TARGETS = [
-    (0.589, 0.532),  # Your calibrated drop position
-    LEFT_BRIDGE,
-    RIGHT_BRIDGE,
-    (0.50, 0.45),    # Center
-    (0.30, 0.55),    # Left side
-    (0.70, 0.55),    # Right side
+    # Bridge areas (common)
+    (0.25, 0.50),   # Left bridge
+    (0.75, 0.50),   # Right bridge
+    (0.30, 0.48),   # Left bridge slightly off
+    (0.70, 0.52),   # Right bridge slightly off
+    
+    # Center area
+    (0.50, 0.45),   # Center
+    (0.50, 0.50),   # Center mid
+    (0.45, 0.47),   # Center left
+    (0.55, 0.47),   # Center right
+    
+    # Defensive positions
+    (0.35, 0.60),   # Left defense
+    (0.65, 0.60),   # Right defense
+    (0.50, 0.65),   # Center defense
+    
+    # Aggressive positions
+    (0.30, 0.40),   # Left push
+    (0.70, 0.40),   # Right push
+    
+    # Your calibrated position
+    (0.589, 0.532),
 ]
 
 

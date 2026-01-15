@@ -83,7 +83,9 @@ class InputController:
         
     def drag_card_to_position(self, 
                                card_slot: int, 
-                               target: Tuple[float, float]):
+                               target: Tuple[float, float],
+                               card_offset: Tuple[float, float] = (0, 0),
+                               duration: float = None):
         """
         Drag a card from its slot to a target position.
         
@@ -92,6 +94,8 @@ class InputController:
         Args:
             card_slot: Which card slot (0-3, left to right)
             target: (x_pct, y_pct) target position as percentages
+            card_offset: (x_offset, y_offset) to add to card position for variation
+            duration: Drag duration (None = use config default)
         """
         if not self.screen_capture:
             raise ValueError("ScreenCapture required for percentage-based positioning")
@@ -99,16 +103,16 @@ class InputController:
         if card_slot < 0 or card_slot > 3:
             raise ValueError("card_slot must be 0-3")
         
-        # Get card position
-        card_x_pct = config.CARD_SLOT_X[card_slot]
-        card_y_pct = config.CARD_SLOT_Y
+        # Get card position with optional offset
+        card_x_pct = config.CARD_SLOT_X[card_slot] + card_offset[0]
+        card_y_pct = config.CARD_SLOT_Y + card_offset[1]
         
         # Convert to pixels
         start = self.screen_capture.convert_percentage_to_pixels(card_x_pct, card_y_pct)
         end = self.screen_capture.convert_percentage_to_pixels(target[0], target[1])
         
-        print(f"Deploying card {card_slot + 1} to target {target}")
-        self.drag(start, end)
+        print(f"Deploying card {card_slot + 1} to target ({target[0]:.2f}, {target[1]:.2f})")
+        self.drag(start, end, duration=duration)
         
     def drag_card_to_bridge(self, card_slot: int, side: str = "left"):
         """

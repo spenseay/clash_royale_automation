@@ -48,11 +48,13 @@ Calibration positions needed:
     parser.add_argument("--count", "-n", type=int, default=None,
                        help="Number of cards to deploy OR games to play (with --loop)")
     parser.add_argument("--delay", "-d", type=float, default=None,
-                       help="Delay between deploys in seconds")
+                       help="Base delay between deploys in seconds")
     parser.add_argument("--duration", type=float, default=180,
                        help="Battle duration in seconds (default: 180)")
     parser.add_argument("--random", "-r", action="store_true",
                        help="Randomize card and target selection")
+    parser.add_argument("--no-humanize", action="store_true",
+                       help="Disable human-like randomness (use exact timing/positions)")
     
     # Position overrides
     parser.add_argument("--battle-pos", nargs=2, type=float, metavar=('X', 'Y'),
@@ -89,7 +91,8 @@ Calibration positions needed:
         bot.run_game_loop(
             num_games=args.count,
             battle_duration=args.duration,
-            deploy_delay=args.delay
+            deploy_delay=args.delay,
+            humanize=not args.no_humanize
         )
         
     else:

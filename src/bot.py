@@ -13,6 +13,7 @@ import config
 from src.screen_capture import ScreenCapture
 from src.input_controller import InputController
 from src.game_state import GameState, GameStateDetector, UIPositions
+from src.human_behavior import HumanBehavior, humanize_position, humanize_button, random_delay
 
 
 class ClashBot:
@@ -34,6 +35,7 @@ class ClashBot:
         self.screen = ScreenCapture()
         self.input = InputController(screen_capture=self.screen)
         self.state = GameStateDetector(screen_capture=self.screen)
+        self.human = HumanBehavior()
         self.running = False
         
         # Track which card/target we're on
@@ -64,13 +66,14 @@ class ClashBot:
         print()
         return True
     
-    def deploy_card(self, card_slot: int = None, target: Tuple[float, float] = None):
+    def deploy_card(self, card_slot: int = None, target: Tuple[float, float] = None, humanize: bool = False):
         """
         Deploy a single card to a target position.
         
         Args:
             card_slot: Which card to deploy (0-3). If None, cycles through cards.
             target: Where to deploy (x_pct, y_pct). If None, cycles through targets.
+            humanize: Add slight randomness to positions
         """
         # Use cycling if not specified
         if card_slot is None:
@@ -81,8 +84,20 @@ class ClashBot:
             target = config.DROP_TARGETS[self.current_target]
             self.current_target = (self.current_target + 1) % len(config.DROP_TARGETS)
         
-        # Deploy the card
-        self.input.drag_card_to_position(card_slot, target)
+        # Add human-like imprecision to card grab
+        if humanize:
+            card_offset = self.human.get_card_offset()
+            drag_duration = self.human.get_drag_duration()
+            # Sometimes hesitate before dragging
+            self.human.pre_drag_hesitation()
+        else:
+            card_offset = (0, 0)
+            drag_duration = config.DRAG_DURATION
+        
+        # Deploy the card with optional offset
+        self.input.drag_card_to_position(card_slot, target, 
+                                          card_offset=card_offset, 
+                                          duration=drag_duration)
         
     def run_continuous(self, 
                        num_deploys: int = None,
@@ -216,14 +231,18 @@ class ClashBot:
     # GAME LOOP METHODS
     # =========================================================================
     
-    def click_position(self, position: Tuple[float, float], description: str = ""):
+    def click_position(self, position: Tuple[float, float], description: str = "", humanize: bool = True):
         """
         Click a position on screen (percentage-based).
         
         Args:
             position: (x_pct, y_pct) percentage position
             description: What we're clicking (for logging)
+            humanize: Add slight position jitter
         """
+        if humanize:
+            position = humanize_button(position[0], position[1])
+        
         x, y = self.screen.convert_percentage_to_pixels(position[0], position[1])
         if description:
             print(f"   Clicking: {description}")
@@ -266,23 +285,25 @@ class ClashBot:
                     deploy_delay: float = None,
                     randomize: bool = True,
                     check_interval: int = 3,
-                    skip_initial_checks: int = 5):
+                    skip_initial_checks: int = 5,
+                    humanize: bool = True):
         """
         Play a single battle by deploying cards until game ends.
         
         Args:
             max_duration: Maximum battle length in seconds (safety limit)
-            deploy_delay: Seconds between card deploys
+            deploy_delay: Base seconds between card deploys (will be randomized if humanize=True)
             randomize: Randomize card/target selection
             check_interval: Check for battle end every N deploys
             skip_initial_checks: Don't check for game over until this many deploys
+            humanize: Add human-like randomness to timing and positions
         """
-        deploy_delay = deploy_delay or config.DEPLOY_DELAY
+        base_delay = deploy_delay or config.DEPLOY_DELAY
         start_time = time.time()
         deploy_count = 0
         
         print(f"\n🎮 Playing battle...")
-        print(f"   Deploy delay: {deploy_delay}s")
+        print(f"   Base deploy delay: {base_delay}s" + (" (humanized)" if humanize else ""))
         print(f"   Checking for battle end every {check_interval} deploys (after {skip_initial_checks} deploys)")
         print()
         
@@ -294,18 +315,26 @@ class ClashBot:
                 print(f"\n   ⏰ Safety limit reached ({max_duration}s)")
                 break
             
-            # Deploy a card
+            # Maybe pause to "think" (human-like hesitation)
+            if humanize:
+                self.human.maybe_think()
+            
+            # Choose card and target
             if randomize:
                 card = random.randint(0, 3)
                 target = random.choice(config.DROP_TARGETS)
             else:
                 card = None
                 target = None
+            
+            # Add position noise for human-like imprecision
+            if humanize and target:
+                target = humanize_position(target[0], target[1])
                 
             deploy_count += 1
             elapsed_str = f"{int(elapsed)}s"
             print(f"   [{elapsed_str}] Deploy #{deploy_count}", end=" ")
-            self.deploy_card(card_slot=card, target=target)
+            self.deploy_card(card_slot=card, target=target, humanize=humanize)
             
             # Check if battle is over (skip first few deploys to avoid false positives)
             if deploy_count >= skip_initial_checks and deploy_count % check_interval == 0:
@@ -314,8 +343,12 @@ class ClashBot:
                     print(f"\n   🏁 Battle ended detected!")
                     break
             
-            # Wait before next deploy
-            time.sleep(deploy_delay)
+            # Wait before next deploy (randomized if humanize)
+            if humanize:
+                delay = random_delay(min_d=base_delay * 0.6, max_d=base_delay * 1.8)
+            else:
+                delay = base_delay
+            time.sleep(delay)
         
         print(f"\n   Battle complete! Deployed {deploy_count} cards in {int(elapsed)}s")
         self.state.set_state(GameState.BATTLE_ENDED)
@@ -359,14 +392,16 @@ class ClashBot:
     def run_game_loop(self, 
                       num_games: int = None,
                       battle_duration: float = 180,
-                      deploy_delay: float = None):
+                      deploy_delay: float = None,
+                      humanize: bool = True):
         """
         Run the full game loop: Menu → Battle → Play → End → Repeat
         
         Args:
             num_games: Number of games to play. None = infinite
             battle_duration: How long to play each battle (seconds)
-            deploy_delay: Seconds between card deploys
+            deploy_delay: Base seconds between card deploys
+            humanize: Add human-like randomness to timing and positions
         """
         self.running = True
         self.games_played = 0
@@ -377,6 +412,7 @@ class ClashBot:
         print("=" * 50)
         print(f"   Games to play: {'infinite' if num_games is None else num_games}")
         print(f"   Battle duration: {battle_duration}s")
+        print(f"   Human-like mode: {'ON' if humanize else 'OFF'}")
         print(f"   Press Ctrl+C to stop")
         print()
         
@@ -409,7 +445,8 @@ class ClashBot:
                 # Play the battle
                 self.play_battle(
                     max_duration=battle_duration,
-                    deploy_delay=deploy_delay
+                    deploy_delay=deploy_delay,
+                    humanize=humanize
                 )
                 
                 # Handle end screen (clicks Play Again for next game)
